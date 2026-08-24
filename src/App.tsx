@@ -173,7 +173,7 @@ function App() {
           <CommandInput disabled={busy || !status.configured} state={state} voiceAvailable={voiceAvailable} onSubmit={handleSubmit} onVoiceAction={handleVoiceAction} />
         </div>
       </div>
-      <StatusBar state={state} model={status.model} />
+      <StatusBar state={state} model={status.model} web={runtime.isWeb} />
     </main>
   );
 }

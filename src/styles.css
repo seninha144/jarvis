@@ -72,3 +72,11 @@ button { color: inherit; }
   .message-content { font-size: 12px; }
   .send-button span { display: none; }
 }
+/* Discreet Web-only voice preference */
+.web-voice-setting { display:flex; align-items:center; gap:7px; color:var(--muted); white-space:nowrap; }
+.web-voice-setting select { max-width:220px; height:24px; border:1px solid rgba(96,220,232,.2); border-radius:2px; outline:none; background:#071013; color:#779da1; font:8px "Cascadia Mono",Consolas,monospace; letter-spacing:.04em; }
+.web-voice-setting select:focus { border-color:var(--cyan); }
+@media(max-width:800px) {
+  .web-voice-setting { margin-left:auto; }
+  .web-voice-setting select { max-width:min(48vw,210px); }
+}
