@@ -37,3 +37,38 @@ button { color: inherit; }
 .recording-label { display:flex; align-items:center; gap:6px; color:var(--cyan); font:8px "Cascadia Mono",Consolas,monospace; letter-spacing:.15em; white-space:nowrap; }
 .recording-label i { width:5px; height:5px; border-radius:50%; background:var(--cyan); box-shadow:0 0 7px var(--cyan); animation:voice-pulse 1s ease-in-out infinite; }
 @keyframes voice-pulse { 50% { opacity:.45; box-shadow:0 0 4px rgba(96,220,232,.2); } }
+/* Web/PWA viewport and iOS safe-area support */
+@supports (height: 100dvh) {
+  .app-shell { height: 100dvh; }
+}
+@media (max-width: 800px) {
+  html, body, #root { min-height: 100%; height: 100%; }
+  .app-shell {
+    padding-top: max(18px, env(safe-area-inset-top));
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    padding-left: max(14px, env(safe-area-inset-left));
+  }
+  .app-header { flex: 0 0 auto; }
+  .primary-layout { overflow: hidden; }
+  .main-column { grid-template-rows: minmax(165px, 31%) auto minmax(100px, 1fr) auto; }
+  .jarvis-core { min-height: 165px; }
+  .core-stage { width: min(54vw, 220px); }
+  .conversation { overflow: hidden; }
+  .message-list { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .command-area { padding-bottom: max(11px, env(safe-area-inset-bottom)); }
+  .mic-button, .send-button { min-height: 44px; }
+  .mic-button { min-width: 44px; width: 44px; }
+  .send-button { padding-inline: 14px; }
+  .command-area textarea { font-size: 16px; }
+}
+@media (max-width: 480px) {
+  .brand-block h1 { font-size: 15px; letter-spacing: .3em; }
+  .header-telemetry .online-indicator { display: none; }
+  .clock { font-size: 12px; }
+  .status-bar { gap: 10px; font-size: 8px; }
+  .status-bar span:first-child, .status-bar .status-right { display: none; }
+  .message { grid-template-columns: 62px 1fr; }
+  .message-content { font-size: 12px; }
+  .send-button span { display: none; }
+}

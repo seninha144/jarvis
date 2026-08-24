@@ -7,35 +7,51 @@ import { JarvisCore } from "./components/JarvisCore";
 import { StatusBar } from "./components/StatusBar";
 import { SystemPanel } from "./components/SystemPanel";
 import { WELCOME_MESSAGE } from "./config/personality";
+import { aiService } from "./services/ai";
 import { AudioCaptureService } from "./services/audioCapture";
 import { AudioPlaybackService } from "./services/audioPlayback";
-import { getOpenAIStatus, sendToJarvis } from "./services/openai";
-import { synthesizeSpeech, transcribeAudio } from "./services/voice";
-import type { JarvisState, Message, OpenAIStatus, VoiceStatus } from "./types/jarvis";
+import { BrowserSpeechRecognitionService } from "./services/browserSpeechRecognition";
+import { BrowserSpeechSynthesisService } from "./services/browserSpeechSynthesis";
+import { synthesizeLocalSpeech, synthesizeSpeech, transcribeAudio, transcribeLocalAudio } from "./services/voice";
+import { recordingToWhisperWav } from "./services/audioWav";
+import { runtime } from "./services/runtime";
+import type { AIStatus, JarvisState, Message, VoiceStatus } from "./types/jarvis";
 
 const welcome: Message = { id: "startup", role: "assistant", content: WELCOME_MESSAGE, timestamp: new Date() };
+const defaultStatus: AIStatus = { configured: false, provider: "gemini", model: "gemini-3.1-flash-lite", sttProvider: runtime.isTauri ? "local" : "browser", ttsProvider: runtime.isTauri ? "local" : "browser", sttConfigured: false, ttsConfigured: runtime.isWeb && BrowserSpeechSynthesisService.isSupported() };
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([welcome]);
   const [state, setState] = useState<JarvisState>("idle");
-  const [status, setStatus] = useState<OpenAIStatus>({ configured: false, model: "gpt-5.6" });
+  const [status, setStatus] = useState<AIStatus>(defaultStatus);
   const [statusLoaded, setStatusLoaded] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>(AudioCaptureService.isSupported() ? "online" : "unavailable");
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("unavailable");
   const capture = useRef(new AudioCaptureService());
   const playback = useRef(new AudioPlaybackService());
+  const recognition = useRef(new BrowserSpeechRecognitionService());
+  const browserSpeech = useRef(new BrowserSpeechSynthesisService());
 
   useEffect(() => {
-    getOpenAIStatus().then((nextStatus) => {
+    aiService.getStatus().then((nextStatus) => {
       setStatus(nextStatus);
-      if (!nextStatus.configured) setVoiceStatus("unavailable");
-    }).catch(() => {
-      setStatus({ configured: false, model: "gpt-5.6" });
-      setVoiceStatus("unavailable");
-    }).finally(() => setStatusLoaded(true));
-    return () => { capture.current.cancel(); playback.current.stop(); };
+      const sttSupported = nextStatus.sttProvider === "browser"
+        ? BrowserSpeechRecognitionService.isSupported()
+        : AudioCaptureService.isSupported() && nextStatus.sttConfigured;
+      const ttsSupported = nextStatus.ttsProvider === "browser"
+        ? BrowserSpeechSynthesisService.isSupported()
+        : nextStatus.ttsConfigured;
+      setVoiceStatus(sttSupported && ttsSupported ? "online" : sttSupported || ttsSupported ? "limited" : "unavailable");
+    }).catch(() => setStatus(defaultStatus)).finally(() => setStatusLoaded(true));
+    return () => {
+      capture.current.cancel();
+      playback.current.stop();
+      recognition.current.cancel();
+      browserSpeech.current.cancel();
+    };
   }, []);
 
-  const apiHistory = useMemo(() => messages.filter((m) => m.id !== "startup" && !m.error && !m.pending).map(({ role, content }) => ({ role, content })), [messages]);
+  const apiHistory = useMemo(() => messages.filter((message) => message.id !== "startup" && !message.error && !message.pending)
+    .map(({ role, content }) => ({ role, content })), [messages]);
 
   const addError = (content: string) => {
     setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content, timestamp: new Date(), error: true }]);
@@ -54,79 +70,92 @@ function App() {
   };
 
   const speakResponse = async (content: string) => {
+    if (!status.ttsConfigured) return;
     try {
-      const audio = await synthesizeSpeech(content);
       setState("speaking");
-      await playback.current.play(audio);
+      if (status.ttsProvider === "browser") await browserSpeech.current.speak(content);
+      else if (status.ttsProvider === "local") await playback.current.play(await synthesizeLocalSpeech(content), "audio/wav");
+      else await playback.current.play(await synthesizeSpeech(content));
       setState("idle");
     } catch (error) {
-      const content = error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Fala interrompida.") { setState("idle"); return; }
       setVoiceStatus("error");
       setState("error");
-      addError(`VOICE: ${content}`);
+      addError(`VOICE: ${message}`);
       window.setTimeout(() => setState("idle"), 2500);
     }
   };
 
   const handleSubmit = async (content: string) => {
-    const userMessage: Message = { id: crypto.randomUUID(), role: "user", content, timestamp: new Date() };
-    setMessages((current) => [...current, userMessage]);
+    if (status.ttsProvider === "browser") browserSpeech.current.unlock();
+    setMessages((current) => [...current, { id: crypto.randomUUID(), role: "user", content, timestamp: new Date() }]);
     setState("thinking");
-    console.info("[JARVIS] Sending request");
+    console.info(`[JARVIS] Sending request via ${status.provider}`);
     try {
-      const response = await sendToJarvis([...apiHistory, { role: "user", content }]);
+      const response = await aiService.sendMessage([...apiHistory, { role: "user", content }]);
       if (!response.content.trim()) throw new Error("A resposta recebida estava vazia.");
-      console.info("[JARVIS] Response received");
       await revealResponse(response.content);
       await speakResponse(response.content);
     } catch (error) {
-      const content = error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       setState("error");
-      addError(content);
+      addError(message);
       window.setTimeout(() => setState("idle"), 2500);
     }
   };
 
+  const finishRecordedRecognition = async () => {
+    const audio = await capture.current.stop();
+    if (status.sttProvider === "local") {
+      return (await transcribeLocalAudio(await recordingToWhisperWav(audio))).trim();
+    }
+    return (await transcribeAudio(audio)).text.trim();
+  };
+
   const handleVoiceAction = async () => {
     if (state === "speaking") {
-      playback.current.stop();
+      if (status.ttsProvider === "browser") browserSpeech.current.cancel(); else playback.current.stop();
       setState("idle");
       return;
     }
     if (state === "listening") {
-      setState("thinking");
-      try {
-        const audio = await capture.current.stop();
-        console.info(`[JARVIS] Recording captured (${Math.round(audio.durationMs)} ms)`);
-        const transcription = await transcribeAudio(audio);
-        if (!transcription.text.trim()) throw new Error("Não foi possível detetar fala na gravação.");
-        setVoiceStatus("online");
-        await handleSubmit(transcription.text.trim());
-      } catch (error) {
-        const content = error instanceof Error ? error.message : String(error);
-        setVoiceStatus("error");
-        setState("error");
-        addError(`VOICE: ${content}`);
-        window.setTimeout(() => setState("idle"), 2500);
+      if (status.sttProvider === "browser") recognition.current.stop();
+      else {
+        setState("thinking");
+        try { await handleSubmit(await finishRecordedRecognition()); }
+        catch (error) { handleVoiceError(error); }
       }
       return;
     }
     if (state !== "idle") return;
     try {
-      await capture.current.start();
-      setVoiceStatus("online");
       setState("listening");
-      console.info("[JARVIS] Microphone listening");
+      console.info(`[JARVIS] Listening via ${status.sttProvider}`);
+      if (status.sttProvider === "browser") {
+        browserSpeech.current.unlock();
+        const transcript = await recognition.current.listen("pt-BR");
+        setState("thinking");
+        await handleSubmit(transcript);
+      } else {
+        await capture.current.start();
+      }
+      setVoiceStatus("online");
     } catch (error) {
-      const content = error instanceof Error ? error.message : String(error);
-      setVoiceStatus(content.includes("permissão") ? "blocked" : "error");
-      setState("error");
-      addError(`VOICE: ${content}`);
-      window.setTimeout(() => setState("idle"), 2500);
+      handleVoiceError(error);
     }
   };
 
+  const handleVoiceError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    setVoiceStatus(message.includes("permissão") ? "blocked" : BrowserSpeechRecognitionService.isSupported() ? "error" : "limited");
+    setState("error");
+    addError(`VOICE: ${message}`);
+    window.setTimeout(() => setState("idle"), 2500);
+  };
+
   const busy = state === "thinking" || state === "speaking" || state === "listening";
+  const voiceAvailable = status.sttConfigured && voiceStatus !== "unavailable" && voiceStatus !== "blocked" && voiceStatus !== "error";
 
   return (
     <main className="app-shell">
@@ -134,14 +163,14 @@ function App() {
       <div className="corner corner-tl"/><div className="corner corner-tr"/><div className="corner corner-bl"/><div className="corner corner-br"/>
       <Header />
       <div className="primary-layout">
-        <SystemPanel aiConfigured={status.configured} voiceStatus={voiceStatus} />
+        <SystemPanel runtimeTarget={runtime.target} aiConfigured={status.configured} aiProvider={status.provider} voiceProvider={status.sttProvider === status.ttsProvider ? status.sttProvider : undefined} voiceStatus={voiceStatus} />
         <div className="main-column">
           <JarvisCore state={state} />
           {statusLoaded && !status.configured && (
-            <div className="connection-alert"><AlertTriangle size={15}/><div><strong>OPENAI CONNECTION REQUIRED</strong><span>Configure your API key to activate JARVIS.</span></div></div>
+            <div className="connection-alert"><AlertTriangle size={15}/><div><strong>{status.provider.toUpperCase()} CONNECTION REQUIRED</strong><span>Configure the provider API key to activate JARVIS.</span></div></div>
           )}
           <Conversation messages={messages} />
-          <CommandInput disabled={busy || !status.configured} state={state} voiceAvailable={status.configured && voiceStatus !== "unavailable" && voiceStatus !== "blocked"} onSubmit={handleSubmit} onVoiceAction={handleVoiceAction} />
+          <CommandInput disabled={busy || !status.configured} state={state} voiceAvailable={voiceAvailable} onSubmit={handleSubmit} onVoiceAction={handleVoiceAction} />
         </div>
       </div>
       <StatusBar state={state} model={status.model} />

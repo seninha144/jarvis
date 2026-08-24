@@ -107,3 +107,74 @@ O frontend nunca faz `fetch` à OpenAI. A Content Security Policy também impede
 Clique no microfone para iniciar e clique novamente para concluir. O WebView solicita a permissão do microfone ao Windows; o áudio permanece em memória, é enviado ao backend Tauri para transcrição e é descartado após o pedido. A resposta usa TTS pelo mesmo backend. Durante a reprodução, o botão permite interromper a fala.
 
 Os modelos e a voz podem ser alterados no `.env`. A captura usa `MediaRecorder`, mantendo a camada de browser reutilizável numa futura PWA; apenas as chamadas autenticadas estão isoladas no serviço IPC/Tauri.
+## Providers V2.1
+
+A configuração padrão usa Gemini para chat e Web Speech API para reconhecimento e síntese, sem chamadas à OpenAI:
+
+```dotenv
+AI_PROVIDER=gemini
+GEMINI_API_KEY=sua-chave-do-google-ai-studio
+GEMINI_MODEL=gemini-3.1-flash-lite
+STT_PROVIDER=browser
+TTS_PROVIDER=browser
+```
+
+Para usar OpenAI no chat, altere `AI_PROVIDER=openai` e configure `OPENAI_API_KEY`. STT e TTS podem ser trocados de forma independente com `STT_PROVIDER=openai` e `TTS_PROVIDER=openai`. A UI consome a interface `AIProvider`; no desktop, sua implementação chama comandos Tauri. Uma futura implementação web deverá chamar um backend Vercel, nunca expor `GEMINI_API_KEY` como variável `VITE_`.
+
+O reconhecimento browser começa somente ao clicar no microfone, usa inicialmente `pt-PT` e termina após a fala ou no segundo clique. Quando `SpeechRecognition`/`webkitSpeechRecognition` não existe, o painel mostra `VOICE LIMITED` e o chat digitado continua disponível. O TTS seleciona por pontuação uma voz local, priorizando inglês britânico masculino, depois português e finalmente a voz padrão do sistema.
+## Web/PWA na Vercel
+
+O projeto possui dois alvos sem expor chaves no navegador:
+
+```text
+Desktop: React → IPC Tauri → Gemini / Whisper local / Piper local
+Web:     React → /api/chat → Gemini + Web Speech STT/TTS
+```
+
+`src/services/runtime.ts` detecta uma única vez a presença do runtime Tauri. `src/services/ai.ts` seleciona o provider Desktop ou Web; os componentes não acessam secrets.
+
+### Desenvolvimento Web completo
+
+A UI isolada abre com `npm run dev`. Para executar também `/api/chat`:
+
+```powershell
+npx vercel login
+npm run dev:web
+```
+
+A CLI vincula o diretório a um projeto Vercel na primeira execução.
+
+### Deploy pela branch main
+
+1. Envie o projeto ao GitHub:
+
+```powershell
+git add .
+git commit -m "Add JARVIS Web"
+git push origin main
+```
+
+2. Na Vercel, escolha **Add New → Project**, importe o repositório e mantenha:
+   - Framework preset: `Vite`
+   - Build command: `npm run build`
+   - Output directory: `dist`
+3. Em **Settings → Environment Variables**, adicione somente:
+
+```dotenv
+GEMINI_API_KEY=sua-chave-do-Google-AI-Studio
+GEMINI_MODEL=gemini-3.1-flash-lite
+```
+
+4. Aplique as variáveis a Production e Preview e execute **Deploy**.
+
+As variáveis Desktop não precisam ser cadastradas na Vercel. Nunca crie `VITE_GEMINI_API_KEY`.
+
+### Segurança da demo
+
+`/api/chat` limita o corpo a 32 KB, 12 mensagens, 2.000 caracteres por mensagem, 12.000 caracteres totais, timeout de 20 segundos e 10 pedidos por IP por minuto em cada instância quente. Erros são sanitizados. O limite em memória é adequado para demo pequena, mas não é global entre instâncias serverless; para divulgação ampla, habilite Vercel Firewall ou armazenamento distribuído.
+
+### Compatibilidade de voz Web
+
+O STT usa `SpeechRecognition`/`webkitSpeechRecognition` com `pt-BR`. Sem suporte, o painel mostra `VOICE LIMITED` e o chat digitado continua ativo. O TTS prioriza voz masculina pt-BR, depois qualquer pt-BR, pt-PT e a voz padrão. Safari/iOS pode ter reconhecimento limitado conforme versão e região; áudio é desbloqueado após interação do usuário.
+
+A PWA inclui manifest, ícones 192/512, metadados Apple, safe areas e service worker mínimo sem cache offline complexo.

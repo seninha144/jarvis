@@ -29,7 +29,7 @@ export function CommandInput({ disabled, state, voiceAvailable, onSubmit, onVoic
     if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); }
   };
 
-  const voiceLabel = isListening ? "Terminar gravação" : isSpeaking ? "Interromper voz" : "Iniciar gravação";
+  const voiceLabel = !voiceAvailable ? "Reconhecimento de voz indisponível; o chat por texto continua ativo." : isListening ? "Terminar gravação" : isSpeaking ? "Interromper voz" : "Iniciar gravação";
 
   return (
     <div className={`command-area ${isListening ? "is-listening" : ""}`}>

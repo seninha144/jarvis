@@ -3,7 +3,9 @@ import type { Message } from "../types/jarvis";
 
 export function Conversation({ messages }: { messages: Message[] }) {
   const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   return (
     <section className="conversation" aria-label="Conversation history">

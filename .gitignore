@@ -9,3 +9,10 @@ src-tauri/target
 .vscode
 Thumbs.db
 .DS_Store
+
+# Local voice runtimes and models (download separately)
+src-tauri/local/bin/*
+src-tauri/local/models/*
+!src-tauri/local/bin/.gitkeep
+!src-tauri/local/models/.gitkeep
+.vercel
